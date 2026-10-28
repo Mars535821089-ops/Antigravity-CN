@@ -19,6 +19,10 @@ const env = { ...process.env, ANTIGRAVITY_CN_BUILD_DIR: output, ANTIGRAVITY_CN_V
 for (const script of ['src/dom/prepare-payload.mjs', 'src/component/extract-ui.cjs', 'src/component/build.cjs']) {
   execFileSync(process.execPath, [join(root, script)], { env, stdio: 'inherit' });
 }
+const coverage = JSON.parse(await readFile(join(output, 'coverage.json'), 'utf8'));
+if (coverage.unmappedUnique !== 0 || coverage.functionalAttributesPatched !== 0) {
+  throw new Error('UI audit is incomplete; review coverage.json and unmapped.json before using this build');
+}
 for (const name of ['cdp.mjs', 'bundle-interceptor.mjs', 'monitor.mjs', 'monitor-permission.mjs']) {
   await copyFile(join(root, 'src', 'runtime', name), join(output, name));
 }
