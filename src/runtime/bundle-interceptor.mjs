@@ -1,8 +1,25 @@
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
+import { isApprovedSource } from './source-fingerprint.mjs';
+
+export async function readApprovedManifest(root) {
+  const manifest = JSON.parse(await fs.readFile(`${root}/bundle-manifest.json`, 'utf8'));
+  if (manifest.approved !== true || manifest.previewOnly !== false ||
+      manifest.fingerprintSchemaVersion !== 1 ||
+      !/^[0-9]+[.][0-9]+[.][0-9]+$/.test(manifest.appVersion ?? '') ||
+      !/^[a-f0-9]{64}$/.test(manifest.originalSHA256 ?? '') ||
+      !/^[a-f0-9]{64}$/.test(manifest.localizedSHA256 ?? '')) {
+    throw new Error('Localization manifest is not an approved runtime build');
+  }
+  const fingerprints = JSON.parse(await fs.readFile(`${root}/source-fingerprints.json`, 'utf8'));
+  if (!isApprovedSource(manifest.appVersion, manifest.originalSHA256, fingerprints)) {
+    throw new Error('Localization manifest source fingerprint is not approved');
+  }
+  return manifest;
+}
 
 export async function loadBundle(root) {
-  const manifest=JSON.parse(await fs.readFile(`${root}/bundle-manifest.json`,'utf8'));
+  const manifest = await readApprovedManifest(root);
   const body=await fs.readFile(`${root}/main.zh-CN.js`);
   if(crypto.createHash('sha256').update(body).digest('hex')!==manifest.localizedSHA256) {
     throw new Error('Localized component bundle failed integrity verification');

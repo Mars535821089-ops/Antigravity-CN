@@ -1,10 +1,15 @@
 import fs from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CDP, discoverApp, isAppPage } from './cdp.mjs';
 import { loadBundle, interceptBundle } from './bundle-interceptor.mjs';
+import { captureOfficialUI } from './capture-ui.mjs';
+import { registerMonitor } from './process-control.mjs';
+import { isApprovedSource } from './source-fingerprint.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
+const pidFile = await registerMonitor(root, 'monitor');
 const manifest=JSON.parse(await fs.readFile(root + '/bundle-manifest.json','utf8'));
 const supportedVersion = manifest.appVersion;
 const componentFlag='__marsComponentChinese'+supportedVersion.split('.').slice(0,2).join('');
@@ -19,6 +24,8 @@ let componentBundlePatched = false;
 let componentBundleWarning;
 let stopping = false;
 let currentStatus = '';
+let lastFingerprintCheckAt = 0;
+let lastFingerprintCheck;
 
 async function status(state, extra = {}) {
   extra={...extra,componentBundlePatched,...(componentBundleWarning?{componentBundleWarning}:{})};
@@ -50,6 +57,34 @@ function checkListener(port) {
       !command.startsWith(`${app}/Contents/MacOS/Antigravity `)) {
     throw new Error('Debugging listener is not the expected Antigravity application');
   }
+}
+
+async function checkUpdatedFingerprint(version) {
+  if (lastFingerprintCheck && lastFingerprintCheck.version === version &&
+      Date.now() - lastFingerprintCheckAt < 60_000) {
+    return lastFingerprintCheck;
+  }
+  lastFingerprintCheckAt = Date.now();
+  try {
+    const captured = await captureOfficialUI();
+    const fingerprints = JSON.parse(await fs.readFile(
+      join(root, 'source-fingerprints.json'), 'utf8',
+    ));
+    lastFingerprintCheck = {
+      version,
+      state: captured.version === version &&
+        isApprovedSource(version, captured.sha256, fingerprints)
+        ? 'approved-fingerprint' : 'unknown-fingerprint',
+      sha256: captured.sha256,
+    };
+  } catch (error) {
+    lastFingerprintCheck = {
+      version,
+      state: 'fingerprint-check-unavailable',
+      error: error.message.slice(0, 200),
+    };
+  }
+  return lastFingerprintCheck;
 }
 
 async function inject(client, frameId) {
@@ -132,7 +167,8 @@ async function tick() {
   if (version !== supportedVersion) {
     for (const entry of connections.values()) await detach(entry);
     connections.clear();
-    await status('version-mismatch', { installedVersion: version });
+    const updateCheck = await checkUpdatedFingerprint(version);
+    await status('version-mismatch', { installedVersion: version, updateCheck });
     return;
   }
   let result;
@@ -179,6 +215,7 @@ async function stop() {
   for (const entry of connections.values()) await detach(entry);
   connections.clear();
   await status('stopped');
+  await fs.rm(pidFile, { force: true });
   process.exit(0);
 }
 process.on('SIGTERM', stop);

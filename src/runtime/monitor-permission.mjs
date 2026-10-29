@@ -2,9 +2,14 @@ import fs from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CDP, discoverApp } from './cdp.mjs';
+import { readApprovedManifest } from './bundle-interceptor.mjs';
+import { registerMonitor } from './process-control.mjs';
 
 const root=fileURLToPath(new URL('.',import.meta.url));
-const manifest=JSON.parse(await fs.readFile(root + '/bundle-manifest.json','utf8')); const supportedVersion=manifest.appVersion; const sessions=new Map();
+const pidFile=await registerMonitor(root,'permission-monitor');
+const manifest=await readApprovedManifest(root);
+const supportedVersion=manifest.appVersion;
+const sessions=new Map();
 let stop=false;
 let last='';
 const matches=target=>{
@@ -17,7 +22,7 @@ async function status(state,windows=0){
   const value=JSON.stringify({state,windows});
   if(last===value)return;
   last=value;
-  await fs.writeFile(`${root}/status.json`,JSON.stringify({
+  await fs.writeFile(`${root}/permission-status.json`,JSON.stringify({
     state,windows,noRestart:true,noReload:true,updatedAt:new Date().toISOString(),
   },null,2),{mode:0o600});
 }
@@ -64,7 +69,9 @@ async function shutdown(){
     await entry.client.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:entry.script}).catch(()=>{});
     entry.client.close();
   }
-  await status('stopped');process.exit(0);
+  await status('stopped');
+  await fs.rm(pidFile,{force:true});
+  process.exit(0);
 }
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 while(!stop){

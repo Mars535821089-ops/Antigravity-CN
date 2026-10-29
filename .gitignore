@@ -9,7 +9,9 @@ dist/
 main.js
 main.zh-CN.js
 status.json
+permission-status.json
 DevToolsActivePort
+*.pid
 .env
 .env.*
 *.pem

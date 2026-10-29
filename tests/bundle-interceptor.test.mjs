@@ -16,6 +16,10 @@ test('only a matching official UI response can be substituted', async () => {
     await writeFile(join(root, 'main.zh-CN.js'), localized);
     await writeFile(join(root, 'bundle-manifest.json'), JSON.stringify({
       appVersion: '2.26.0', originalSHA256: hash(official), localizedSHA256: hash(localized),
+      approved: true, previewOnly: false, fingerprintSchemaVersion: 1,
+    }));
+    await writeFile(join(root, 'source-fingerprints.json'), JSON.stringify({
+      '2.26.0': [hash(official)],
     }));
     const bundle = await loadBundle(root);
     async function run(body, url = 'https://127.0.0.1:60123/main.js') {
@@ -38,6 +42,56 @@ test('only a matching official UI response can be substituted', async () => {
     assert.equal(changed.notices[0][0], false);
     const unrelated = await run(official, 'https://127.0.0.1:60123/other.js');
     assert.equal(unrelated.calls.at(-1).method, 'Fetch.continueRequest');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preview-only and malformed manifests cannot be loaded by the runtime', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'antigravity-cn-test-'));
+  const localized = 'const label="中文";';
+  try {
+    await writeFile(join(root, 'main.zh-CN.js'), localized);
+    await writeFile(join(root, 'bundle-manifest.json'), JSON.stringify({
+      appVersion: '2.27.0',
+      originalSHA256: hash('official'),
+      localizedSHA256: hash(localized),
+      approved: false,
+      previewOnly: true,
+      fingerprintSchemaVersion: 1,
+    }));
+    await assert.rejects(loadBundle(root), /not an approved runtime build/);
+    await writeFile(join(root, 'bundle-manifest.json'), JSON.stringify({
+      appVersion: '2.27.0',
+      originalSHA256: 'not-a-fingerprint',
+      localizedSHA256: hash(localized),
+      approved: true,
+      previewOnly: false,
+      fingerprintSchemaVersion: 1,
+    }));
+    await assert.rejects(loadBundle(root), /not an approved runtime build/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('runtime manifest must match its bundled version fingerprint allowlist', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'antigravity-cn-test-'));
+  const localized = 'const label="中文";';
+  try {
+    await writeFile(join(root, 'main.zh-CN.js'), localized);
+    await writeFile(join(root, 'source-fingerprints.json'), JSON.stringify({
+      '2.27.0': [hash('different official source')],
+    }));
+    await writeFile(join(root, 'bundle-manifest.json'), JSON.stringify({
+      appVersion: '2.27.0',
+      originalSHA256: hash('official source'),
+      localizedSHA256: hash(localized),
+      approved: true,
+      previewOnly: false,
+      fingerprintSchemaVersion: 1,
+    }));
+    await assert.rejects(loadBundle(root), /source fingerprint is not approved/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
